@@ -1,0 +1,71 @@
+import math
+
+import torch
+from torch import nn
+
+from .volterra import QuadraticVolterra
+
+
+class VoRALinear(nn.Module):
+    """Linear layer with LoRA plus low-rank quadratic Volterra adaptation."""
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        lora_rank: int = 8,
+        volterra_rank: int = 8,
+        lora_alpha: float = 1.0,
+        volterra_alpha: float = 1.0,
+        dropout: float = 0.0,
+        bias: bool = True,
+        freeze_base: bool = True,
+    ) -> None:
+        super().__init__()
+        if lora_rank <= 0:
+            raise ValueError("lora_rank must be positive.")
+
+        self.in_features = in_features
+        self.out_features = out_features
+        self.lora_rank = lora_rank
+        self.volterra_rank = volterra_rank
+        self.lora_scaling = lora_alpha / lora_rank
+
+        self.linear = nn.Linear(in_features, out_features, bias=bias)
+        self.dropout = nn.Dropout(dropout)
+        self.A_l = nn.Linear(in_features, lora_rank, bias=False)
+        self.B_l = nn.Linear(lora_rank, out_features, bias=False)
+        self.volterra = QuadraticVolterra(
+            in_features=in_features,
+            out_features=out_features,
+            rank=volterra_rank,
+            alpha=volterra_alpha,
+            dropout=dropout,
+        )
+
+        self.reset_parameters()
+        if freeze_base:
+            self.freeze_base()
+
+    def reset_parameters(self) -> None:
+        nn.init.kaiming_uniform_(self.A_l.weight, a=math.sqrt(5))
+        nn.init.zeros_(self.B_l.weight)
+
+    def freeze_base(self) -> None:
+        for param in self.linear.parameters():
+            param.requires_grad = False
+
+    def forward(self, x: torch.Tensor, return_branches: bool = False) -> torch.Tensor:
+        base = self.linear(x)
+        lora = self.B_l(self.A_l(self.dropout(x))) * self.lora_scaling
+        volterra = self.volterra(x)
+        out = base + lora + volterra
+
+        if return_branches:
+            return out, {
+                "base": base,
+                "lora": lora,
+                "volterra": volterra,
+            }
+
+        return out

@@ -1,0 +1,1 @@
+"""Image restoration transform placeholder."""

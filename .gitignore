@@ -1,0 +1,68 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local/editor noise
+.DS_Store
+Thumbs.db
+~$*
+
+# Secrets and machine-local config
+.env
+.env.*
+*.local
+
+# Training checkpoints and model weights
+checkpoints/**
+*.ckpt
+*.pth
+*.pt
+*.onnx
+*.safetensors
+!checkpoints/.gitkeep
+
+# Experiment outputs
+outputs/**
+runs/
+logs/
+wandb/
+mlruns/
+experiments/**/runs/
+experiments/**/logs/
+!outputs/
+!outputs/figures/
+!outputs/images/
+!outputs/logs/
+!outputs/figures/.gitkeep
+!outputs/images/.gitkeep
+!outputs/logs/.gitkeep
+
+# Raw datasets and large media artifacts
+data/
+raw_data/
+dataset/
+datasets/raw/
+datasets/images/
+datasets/train/
+datasets/val/
+datasets/test/
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
+
+# Third-party sample data and downloaded weights
+external/SwinIR/
+external/**/model_zoo/
+external/**/testsets/
