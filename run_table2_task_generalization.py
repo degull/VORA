@@ -1,4 +1,5 @@
 import argparse
+import csv
 import subprocess
 import sys
 from pathlib import Path
@@ -28,17 +29,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-val-samples", type=int, default=1)
     parser.add_argument("--results-csv", default="outputs/logs/table2_task_generalization.csv")
     parser.add_argument("--checkpoint-dir", default="checkpoints/table2")
+    parser.add_argument("--reset-results", action="store_true")
+    parser.add_argument("--no-skip-completed", action="store_true")
     return parser.parse_args()
+
+
+def completed_pairs(csv_path: Path) -> set[tuple[str, str]]:
+    if not csv_path.exists():
+        return set()
+    with csv_path.open("r", newline="") as handle:
+        return {(row["dataset"], row["method"]) for row in csv.DictReader(handle)}
 
 
 def main() -> None:
     args = parse_args()
     csv_path = Path(args.results_csv)
-    if csv_path.exists():
+    if args.reset_results and csv_path.exists():
         csv_path.unlink()
 
+    completed = completed_pairs(csv_path)
     for task, dataset in TASK_DATASETS.items():
         for method in args.methods:
+            if not args.no_skip_completed and (dataset, method) in completed:
+                print("")
+                print(f"Skipping completed Table 2 {task} ({dataset}) / {method}")
+                continue
             command = [
                 sys.executable,
                 "train.py",
@@ -70,6 +85,7 @@ def main() -> None:
                 args.results_csv,
                 "--checkpoint-dir",
                 args.checkpoint_dir,
+                "--auto-resume",
             ]
             print("")
             print(f"Running Table 2 {task} ({dataset}) / {method}")

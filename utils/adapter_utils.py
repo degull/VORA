@@ -4,7 +4,9 @@ from dataclasses import dataclass
 
 from torch import nn
 
+from models.lora_conv import LoRAConv2d
 from models.lora_linear import LoRALinear
+from models.vora_conv import VoRAConv2d
 from models.vora_full_linear import VoRAFullLinear, VoRATokenLinear
 from models.vora_linear import VoRALinear
 
@@ -26,12 +28,19 @@ def _copy_linear(source: nn.Linear, target: LoRALinear | VoRALinear | VoRATokenL
         target.linear.bias.data.copy_(source.bias.data)
 
 
+def _copy_conv1x1(source: nn.Conv2d, target: LoRAConv2d | VoRAConv2d) -> None:
+    target.conv.weight.data.copy_(source.weight.data)
+    if source.bias is not None and target.conv.bias is not None:
+        target.conv.bias.data.copy_(source.bias.data)
+
+
 def replace_linear_adapters(
     module: nn.Module,
     method: str,
     target_keywords: tuple[str, ...] = ("qkv", "proj", "mlp"),
     rank: int = 4,
     prefix: str = "",
+    include_conv1x1: bool = True,
 ) -> AdapterStats:
     stats = AdapterStats()
     for name, child in list(module.named_children()):
@@ -74,12 +83,40 @@ def replace_linear_adapters(
                 stats.skipped += 1
             continue
 
+        if include_conv1x1 and isinstance(child, nn.Conv2d) and child.kernel_size == (1, 1):
+            if any(keyword in full_name for keyword in target_keywords):
+                if method == "lora":
+                    conv_replacement = LoRAConv2d(
+                        child.in_channels,
+                        child.out_channels,
+                        rank=rank,
+                        bias=child.bias is not None,
+                    )
+                elif method == "vora_v1":
+                    conv_replacement = VoRAConv2d(
+                        child.in_channels,
+                        child.out_channels,
+                        lora_rank=rank,
+                        volterra_rank=rank,
+                        bias=child.bias is not None,
+                    )
+                else:
+                    stats.skipped += 1
+                    continue
+                _copy_conv1x1(child, conv_replacement)
+                setattr(module, name, conv_replacement)
+                stats.replaced += 1
+            else:
+                stats.skipped += 1
+            continue
+
         child_stats = replace_linear_adapters(
             child,
             method,
             target_keywords=target_keywords,
             rank=rank,
             prefix=full_name,
+            include_conv1x1=include_conv1x1,
         )
         stats.replaced += child_stats.replaced
         stats.skipped += child_stats.skipped

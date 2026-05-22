@@ -45,6 +45,8 @@ experiments/**/logs/
 !outputs/figures/.gitkeep
 !outputs/images/.gitkeep
 !outputs/logs/.gitkeep
+*.csv
+*.tsv
 
 # Raw datasets and large media artifacts
 data/

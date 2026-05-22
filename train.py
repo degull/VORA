@@ -7,9 +7,15 @@ from torch import nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+from datasets.composite_degradation_dataset import COMPOSITE_CHOICES, CompositeDegradationDataset
 from datasets.paired_image_dataset import PairedImageDataset
 from engine.metrics import psnr, simple_ssim
+from models.restoration.official_adair import build_official_adair
+from models.restoration.official_dfpir_restormer import build_official_dfpir_restormer
+from models.restoration.official_hat import build_official_hat
+from models.restoration.official_mambairv2 import build_official_mambairv2
 from models.restoration.official_swinir import build_official_swinir
+from models.restoration.official_uformer import build_official_uformer
 from models.restoration.swinir_lite import SwinIRLite
 from utils.adapter_utils import freeze_module, replace_linear_adapters
 from utils.model_utils import count_parameters
@@ -17,6 +23,15 @@ from utils.model_utils import count_parameters
 
 DATASET_CHOICES = ("rain100h", "csd", "gopro", "reside6k", "sidd")
 METHOD_CHOICES = ("full_ft", "frozen", "lora", "vora_v1", "vora_token", "vora_full")
+BACKBONE_CHOICES = (
+    "swinir_lite",
+    "swinir_official",
+    "uformer",
+    "hat",
+    "mambairv2",
+    "adair",
+    "dfpir_restormer",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -24,10 +39,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset", default="rain100h", choices=DATASET_CHOICES)
     parser.add_argument("--data-root", default=r"E:\restormer+volterra\data")
     parser.add_argument("--method", default="vora_v1", choices=METHOD_CHOICES)
-    parser.add_argument("--backbone", default="swinir_lite", choices=("swinir_lite", "swinir_official"))
+    parser.add_argument("--backbone", default="swinir_lite", choices=BACKBONE_CHOICES)
     parser.add_argument("--swinir-size", default="tiny", choices=("tiny", "small", "base"))
+    parser.add_argument("--backbone-size", default="", choices=("", "tiny", "base"))
     parser.add_argument("--target", default="all", choices=("attn", "mlp", "all"))
     parser.add_argument("--rank", type=int, default=4)
+    parser.add_argument("--added-degradation", default="none", choices=COMPOSITE_CHOICES)
     parser.add_argument("--crop-size", type=int, default=64)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--steps", type=int, default=10)
@@ -40,6 +57,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint-dir", default="checkpoints")
     parser.add_argument("--save-interval", type=int, default=5000, help="Save latest checkpoint every N steps. Use 0 to disable.")
     parser.add_argument("--eval-interval", type=int, default=0, help="Evaluate and save best checkpoint every N steps. Use 0 for final eval only.")
+    parser.add_argument("--resume", default="", help="Path to a checkpoint to resume from.")
+    parser.add_argument("--auto-resume", action="store_true", help="Resume from this run's latest checkpoint if it exists.")
     return parser.parse_args()
 
 
@@ -51,11 +70,41 @@ def target_keywords(target: str) -> tuple[str, ...]:
     return ("attn.qkv", "attn.proj", "mlp")
 
 
+def backbone_size(args: argparse.Namespace) -> str:
+    return args.backbone_size or args.swinir_size
+
+
+def adapter_keywords_for_backbone(args: argparse.Namespace) -> tuple[str, ...]:
+    if args.backbone == "adair":
+        if args.target == "attn":
+            return ("attn", "qkv", "project_out")
+        if args.target == "mlp":
+            return ("project_in", "project_out", "reduce_chan")
+        return ("project_in", "project_out", "reduce_chan", "attn", "qkv")
+    if args.backbone == "dfpir_restormer":
+        if args.target == "attn":
+            return ("qkv", "project_out")
+        if args.target == "mlp":
+            return ("project_in", "project_out", "reduce_chan")
+        return ("qkv", "project_in", "project_out", "reduce_chan")
+    return target_keywords(args.target)
+
+
 def build_restoration_model(args: argparse.Namespace) -> tuple[nn.Module, int]:
     if args.backbone == "swinir_lite":
         model = SwinIRLite(embed_dim=48, depth=2, num_heads=4, window_size=8)
     elif args.backbone == "swinir_official":
         model = build_official_swinir(size=args.swinir_size, img_size=args.crop_size)
+    elif args.backbone == "uformer":
+        model = build_official_uformer(size=backbone_size(args), img_size=args.crop_size)
+    elif args.backbone == "hat":
+        model = build_official_hat(size=backbone_size(args), img_size=args.crop_size)
+    elif args.backbone == "mambairv2":
+        model = build_official_mambairv2(size=backbone_size(args), img_size=args.crop_size)
+    elif args.backbone == "adair":
+        model = build_official_adair(size=backbone_size(args), img_size=args.crop_size)
+    elif args.backbone == "dfpir_restormer":
+        model = build_official_dfpir_restormer(size=backbone_size(args), img_size=args.crop_size)
     else:
         raise ValueError(f"Unsupported backbone: {args.backbone}")
     replaced = 0
@@ -67,7 +116,7 @@ def build_restoration_model(args: argparse.Namespace) -> tuple[nn.Module, int]:
         stats = replace_linear_adapters(
             model,
             method=args.method,
-            target_keywords=target_keywords(args.target),
+            target_keywords=adapter_keywords_for_backbone(args),
             rank=args.rank,
         )
         replaced = stats.replaced
@@ -103,6 +152,7 @@ def append_result(args: argparse.Namespace, row: dict[str, str | int | float]) -
         "method",
         "target",
         "rank",
+        "added_degradation",
         "steps",
         "train_pairs",
         "val_pairs",
@@ -133,9 +183,10 @@ def print_result_table(row: dict[str, str | int | float]) -> None:
 
 
 def checkpoint_prefix(args: argparse.Namespace) -> Path:
+    degradation_suffix = "" if args.added_degradation == "none" else f"_{args.added_degradation}"
     name = (
         f"{args.backbone}_{args.swinir_size}_{args.dataset}_"
-        f"{args.method}_{args.target}_r{args.rank}"
+        f"{args.method}_{args.target}_r{args.rank}{degradation_suffix}"
     )
     return Path(args.checkpoint_dir) / name
 
@@ -162,23 +213,41 @@ def save_checkpoint(
     torch.save(payload, path)
 
 
+def load_checkpoint(
+    path: Path,
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer | None = None,
+    device: str = "cpu",
+) -> int:
+    checkpoint = torch.load(path, map_location=device)
+    model.load_state_dict(checkpoint["model"])
+    if optimizer is not None and "optimizer" in checkpoint:
+        optimizer.load_state_dict(checkpoint["optimizer"])
+    return int(checkpoint.get("step", 0))
+
+
 def main() -> None:
     args = parse_args()
     torch.manual_seed(42)
 
-    train_set = PairedImageDataset(
+    dataset_cls = CompositeDegradationDataset if args.added_degradation != "none" else PairedImageDataset
+    train_kwargs = {"added_degradation": args.added_degradation} if args.added_degradation != "none" else {}
+    train_set = dataset_cls(
         dataset=args.dataset,
         data_root=Path(args.data_root),
         split="train",
         crop_size=args.crop_size,
         max_samples=None if args.max_train_samples == 0 else args.max_train_samples,
+        **train_kwargs,
     )
-    val_set = PairedImageDataset(
+    val_kwargs = {"added_degradation": args.added_degradation} if args.added_degradation != "none" else {}
+    val_set = dataset_cls(
         dataset=args.dataset,
         data_root=Path(args.data_root),
         split="test",
         crop_size=args.crop_size,
         max_samples=None if args.max_val_samples == 0 else args.max_val_samples,
+        **val_kwargs,
     )
     train_loader = DataLoader(
         train_set,
@@ -199,6 +268,7 @@ def main() -> None:
     print(f"Backbone: {args.backbone}")
     print(f"Method: {args.method}")
     print(f"Target: {args.target}")
+    print(f"Added degradation: {args.added_degradation}")
     print(f"Train pairs: {len(train_set)} | Val pairs: {len(val_set)}")
     print(f"Replaced Linear layers: {replaced}")
     print(f"Trainable params: {trainable_params:,}")
@@ -217,6 +287,7 @@ def main() -> None:
             "method": args.method,
             "target": args.target,
             "rank": args.rank,
+            "added_degradation": args.added_degradation,
             "steps": 0,
             "train_pairs": len(train_set),
             "val_pairs": len(val_set),
@@ -237,8 +308,42 @@ def main() -> None:
     model.train()
 
     step = 0
+    resume_path = Path(args.resume) if args.resume else None
+    if args.auto_resume and latest_checkpoint.exists():
+        resume_path = latest_checkpoint
+    if resume_path is not None and resume_path.exists():
+        step = load_checkpoint(resume_path, model, optimizer, args.device)
+        print(f"Resumed from {resume_path} at step {step}")
+
     best_psnr = float("-inf")
-    progress = tqdm(total=args.steps, desc="training")
+    if step >= args.steps:
+        print(f"Checkpoint step {step} already reached requested steps {args.steps}. Evaluating only.")
+        val_psnr, val_ssim = evaluate(model, val_loader, args.device)
+        gpu_mem = torch.cuda.max_memory_allocated() / (1024**2) if args.device.startswith("cuda") else 0.0
+        row = {
+            "dataset": args.dataset,
+            "backbone": args.backbone,
+            "swinir_size": args.swinir_size,
+            "method": args.method,
+            "target": args.target,
+            "rank": args.rank,
+            "added_degradation": args.added_degradation,
+            "steps": args.steps,
+            "train_pairs": len(train_set),
+            "val_pairs": len(val_set),
+            "replaced_layers": replaced,
+            "trainable_params": trainable_params,
+            "psnr": val_psnr,
+            "ssim": val_ssim,
+            "gpu_mem_mb": round(gpu_mem, 2),
+            "best_checkpoint": str(best_checkpoint),
+            "latest_checkpoint": str(latest_checkpoint),
+        }
+        append_result(args, row)
+        print_result_table(row)
+        return
+
+    progress = tqdm(total=args.steps, initial=step, desc="training")
     while step < args.steps:
         for batch in train_loader:
             degraded = batch["input"].to(args.device)
@@ -279,6 +384,7 @@ def main() -> None:
         "method": args.method,
         "target": args.target,
         "rank": args.rank,
+        "added_degradation": args.added_degradation,
         "steps": args.steps,
         "train_pairs": len(train_set),
         "val_pairs": len(val_set),
