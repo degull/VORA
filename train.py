@@ -1,5 +1,6 @@
 import argparse
 import csv
+import os
 from pathlib import Path
 
 import torch
@@ -45,6 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--target", default="all", choices=("attn", "mlp", "all"))
     parser.add_argument("--rank", type=int, default=4)
     parser.add_argument("--added-degradation", default="none", choices=COMPOSITE_CHOICES)
+    parser.add_argument("--degradation-intensity", type=float, default=-1.0)
     parser.add_argument("--crop-size", type=int, default=64)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--steps", type=int, default=10)
@@ -153,6 +155,7 @@ def append_result(args: argparse.Namespace, row: dict[str, str | int | float]) -
         "target",
         "rank",
         "added_degradation",
+        "degradation_intensity",
         "steps",
         "train_pairs",
         "val_pairs",
@@ -184,6 +187,9 @@ def print_result_table(row: dict[str, str | int | float]) -> None:
 
 def checkpoint_prefix(args: argparse.Namespace) -> Path:
     degradation_suffix = "" if args.added_degradation == "none" else f"_{args.added_degradation}"
+    if args.added_degradation != "none" and args.degradation_intensity >= 0:
+        intensity_text = str(args.degradation_intensity).replace(".", "p")
+        degradation_suffix += f"_i{intensity_text}"
     name = (
         f"{args.backbone}_{args.swinir_size}_{args.dataset}_"
         f"{args.method}_{args.target}_r{args.rank}{degradation_suffix}"
@@ -210,7 +216,9 @@ def save_checkpoint(
     }
     if optimizer is not None:
         payload["optimizer"] = optimizer.state_dict()
-    torch.save(payload, path)
+    tmp_path = path.with_name(path.name + ".tmp")
+    torch.save(payload, tmp_path)
+    os.replace(tmp_path, path)
 
 
 def load_checkpoint(
@@ -231,7 +239,12 @@ def main() -> None:
     torch.manual_seed(42)
 
     dataset_cls = CompositeDegradationDataset if args.added_degradation != "none" else PairedImageDataset
-    train_kwargs = {"added_degradation": args.added_degradation} if args.added_degradation != "none" else {}
+    intensity = None if args.degradation_intensity < 0 else args.degradation_intensity
+    train_kwargs = (
+        {"added_degradation": args.added_degradation, "degradation_intensity": intensity}
+        if args.added_degradation != "none"
+        else {}
+    )
     train_set = dataset_cls(
         dataset=args.dataset,
         data_root=Path(args.data_root),
@@ -240,7 +253,11 @@ def main() -> None:
         max_samples=None if args.max_train_samples == 0 else args.max_train_samples,
         **train_kwargs,
     )
-    val_kwargs = {"added_degradation": args.added_degradation} if args.added_degradation != "none" else {}
+    val_kwargs = (
+        {"added_degradation": args.added_degradation, "degradation_intensity": intensity}
+        if args.added_degradation != "none"
+        else {}
+    )
     val_set = dataset_cls(
         dataset=args.dataset,
         data_root=Path(args.data_root),
@@ -269,6 +286,7 @@ def main() -> None:
     print(f"Method: {args.method}")
     print(f"Target: {args.target}")
     print(f"Added degradation: {args.added_degradation}")
+    print(f"Degradation intensity: {intensity if intensity is not None else 'default'}")
     print(f"Train pairs: {len(train_set)} | Val pairs: {len(val_set)}")
     print(f"Replaced Linear layers: {replaced}")
     print(f"Trainable params: {trainable_params:,}")
@@ -288,6 +306,7 @@ def main() -> None:
             "target": args.target,
             "rank": args.rank,
             "added_degradation": args.added_degradation,
+            "degradation_intensity": args.degradation_intensity,
             "steps": 0,
             "train_pairs": len(train_set),
             "val_pairs": len(val_set),
@@ -328,6 +347,7 @@ def main() -> None:
             "target": args.target,
             "rank": args.rank,
             "added_degradation": args.added_degradation,
+            "degradation_intensity": args.degradation_intensity,
             "steps": args.steps,
             "train_pairs": len(train_set),
             "val_pairs": len(val_set),
@@ -385,6 +405,7 @@ def main() -> None:
         "target": args.target,
         "rank": args.rank,
         "added_degradation": args.added_degradation,
+        "degradation_intensity": args.degradation_intensity,
         "steps": args.steps,
         "train_pairs": len(train_set),
         "val_pairs": len(val_set),

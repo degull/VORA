@@ -37,15 +37,19 @@ def apply_composite_degradation(
     degradation: str,
     name: str,
     split: str,
+    intensity: float | None = None,
 ) -> torch.Tensor:
     if degradation == "none":
         return x
     if degradation == "haze":
-        return add_haze(x)
+        transmission = 0.72 if intensity is None else intensity
+        return add_haze(x, transmission=transmission)
     if degradation == "blur":
-        return add_blur(x)
+        sigma = 1.4 if intensity is None else intensity
+        return add_blur(x, sigma=sigma)
     if degradation == "noise":
-        return add_noise(x, name=name, split=split)
+        std = 0.04 if intensity is None else intensity
+        return add_noise(x, name=name, split=split, std=std)
     raise ValueError(f"Unsupported composite degradation: {degradation}")
 
 
@@ -58,6 +62,7 @@ class CompositeDegradationDataset(PairedImageDataset):
         crop_size: int = 128,
         max_samples: int | None = None,
         added_degradation: str = "none",
+        degradation_intensity: float | None = None,
     ) -> None:
         if added_degradation not in COMPOSITE_CHOICES:
             raise ValueError(f"Unsupported added degradation: {added_degradation}")
@@ -69,6 +74,7 @@ class CompositeDegradationDataset(PairedImageDataset):
             max_samples=max_samples,
         )
         self.added_degradation = added_degradation
+        self.degradation_intensity = degradation_intensity
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor | str]:
         sample = super().__getitem__(index)
@@ -78,5 +84,6 @@ class CompositeDegradationDataset(PairedImageDataset):
             degradation=self.added_degradation,
             name=name,
             split=self.split,
+            intensity=self.degradation_intensity,
         )
         return sample
