@@ -4,6 +4,8 @@ from dataclasses import dataclass
 
 from torch import nn
 
+from models.ablation_conv import LinearVolterraConv2d, VolterraOnlyConv2d
+from models.ablation_linear import LinearVolterraLinear, VolterraOnlyLinear
 from models.lora_conv import LoRAConv2d
 from models.lora_linear import LoRALinear
 from models.vora_conv import VoRAConv2d
@@ -22,13 +24,16 @@ def freeze_module(module: nn.Module) -> None:
         param.requires_grad = False
 
 
-def _copy_linear(source: nn.Linear, target: LoRALinear | VoRALinear | VoRATokenLinear | VoRAFullLinear) -> None:
+def _copy_linear(
+    source: nn.Linear,
+    target: LoRALinear | VoRALinear | VoRATokenLinear | VoRAFullLinear | VolterraOnlyLinear | LinearVolterraLinear,
+) -> None:
     target.linear.weight.data.copy_(source.weight.data)
     if source.bias is not None and target.linear.bias is not None:
         target.linear.bias.data.copy_(source.bias.data)
 
 
-def _copy_conv1x1(source: nn.Conv2d, target: LoRAConv2d | VoRAConv2d) -> None:
+def _copy_conv1x1(source: nn.Conv2d, target: LoRAConv2d | VoRAConv2d | VolterraOnlyConv2d | LinearVolterraConv2d) -> None:
     target.conv.weight.data.copy_(source.weight.data)
     if source.bias is not None and target.conv.bias is not None:
         target.conv.bias.data.copy_(source.bias.data)
@@ -74,6 +79,21 @@ def replace_linear_adapters(
                         num_experts=4,
                         bias=child.bias is not None,
                     )
+                elif method == "volterra_only":
+                    replacement = VolterraOnlyLinear(
+                        child.in_features,
+                        child.out_features,
+                        rank=rank,
+                        bias=child.bias is not None,
+                    )
+                elif method == "lora_linear_volterra":
+                    replacement = LinearVolterraLinear(
+                        child.in_features,
+                        child.out_features,
+                        lora_rank=rank,
+                        volterra_rank=rank,
+                        bias=child.bias is not None,
+                    )
                 else:
                     raise ValueError(f"Unsupported adapter method: {method}")
                 _copy_linear(child, replacement)
@@ -94,6 +114,21 @@ def replace_linear_adapters(
                     )
                 elif method == "vora_v1":
                     conv_replacement = VoRAConv2d(
+                        child.in_channels,
+                        child.out_channels,
+                        lora_rank=rank,
+                        volterra_rank=rank,
+                        bias=child.bias is not None,
+                    )
+                elif method == "volterra_only":
+                    conv_replacement = VolterraOnlyConv2d(
+                        child.in_channels,
+                        child.out_channels,
+                        rank=rank,
+                        bias=child.bias is not None,
+                    )
+                elif method == "lora_linear_volterra":
+                    conv_replacement = LinearVolterraConv2d(
                         child.in_channels,
                         child.out_channels,
                         lora_rank=rank,
