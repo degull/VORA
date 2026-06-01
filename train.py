@@ -23,7 +23,16 @@ from utils.model_utils import count_parameters
 
 
 DATASET_CHOICES = ("rain100h", "csd", "gopro", "reside6k", "sidd")
-METHOD_CHOICES = ("full_ft", "frozen", "lora", "vora_v1", "vora_token", "vora_full")
+METHOD_CHOICES = (
+    "full_ft",
+    "frozen",
+    "lora",
+    "vora_v1",
+    "vora_token",
+    "vora_full",
+    "volterra_only",
+    "lora_linear_volterra",
+)
 BACKBONE_CHOICES = (
     "swinir_lite",
     "swinir_official",
@@ -113,7 +122,7 @@ def build_restoration_model(args: argparse.Namespace) -> tuple[nn.Module, int]:
 
     if args.method == "frozen":
         freeze_module(model)
-    elif args.method in {"lora", "vora_v1", "vora_token", "vora_full"}:
+    elif args.method in {"lora", "vora_v1", "vora_token", "vora_full", "volterra_only", "lora_linear_volterra"}:
         freeze_module(model)
         stats = replace_linear_adapters(
             model,
