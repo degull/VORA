@@ -76,7 +76,8 @@ Setting $r_l=r_q=r/2$ gives VoRA the same parameter count as LoRA rank $r$. The 
 ### SwinIR integration
 
 <p align="center">
-  <img src="assets/vora-swinir-insertion.png" width="520" alt="VoRA insertion into a SwinIR Transformer block">
+  <img width="700" height="620" alt="vora-swinir-insertion" src="https://github.com/user-attachments/assets/fe6b2cfa-3668-4efb-a68f-d6334b18e052" /><img width="1450" height="430" alt="vora-overview" src="https://github.com/user-attachments/assets/f90da9e3-9fea-4bd4-b4e7-c542714f3957" />
+
 </p>
 
 VoRA is attached to selected frozen projection layers in a SwinIR restoration Transformer block: the fused QKV projection, attention output projection, and MLP projection. The frozen response and VoRA residual are computed from the same input and combined by residual addition.
