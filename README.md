@@ -1,64 +1,282 @@
-# VoRA
+# VoRA: Volterra Low-Rank Adaptation Using Nonlinear Interactions for Image Restoration
 
-VoRA is a research-oriented PyTorch scaffold for PEFT modules that extend LoRA with efficient low-rank nonlinear Volterra adaptation.
+<p align="center">
+  Parameter-efficient fine-tuning with parallel linear and low-rank quadratic adaptation branches.
+</p>
 
-Starting point:
+<p align="center">
+  선형 LoRA 분기와 저랭크 2차 상호작용 분기를 결합한 이미지 복원용 파라미터 효율적 미세조정 기법입니다.
+</p>
 
-```text
-y = W0 x + B_l A_l x
+<p align="center">
+  <a href="#overview">English</a> · <a href="#한국어-소개">한국어</a> ·
+  <a href="#results">Results</a> · <a href="#quick-start">Quick Start</a>
+</p>
+
+---
+
+## Overview
+
+VoRA (Volterra Low-Rank Adaptation) extends LoRA with a parallel **low-rank quadratic branch** for parameter-efficient image restoration. Standard LoRA applies a linear low-rank residual to a frozen pretrained projection. VoRA preserves that linear path and adds an element-wise quadratic interaction in a compact latent space, allowing the adapter to represent nonlinear and interaction-dependent restoration residuals without constructing a full input-space quadratic kernel.
+
+The repository supports deraining, desnowing, denoising, deblurring, dehazing, and composite degradation experiments across multiple restoration backbones.
+
+### Highlights
+
+- **Linear + quadratic adaptation:** combines the standard LoRA residual with a structured second-order residual.
+- **Parameter-efficient design:** freezes pretrained backbone weights and trains only the adapter parameters.
+- **Parameter-matched evaluation:** VoRA with linear and quadratic ranks 4 matches the 294,912 trainable parameters of LoRA rank 8.
+- **Backbone generalization:** supports SwinIR, Uformer, HAT, AdaIR, Restormer/DFPIR, and MambaIRv2 integrations.
+- **Interaction modeling:** includes controlled composite degradation and degradation-intensity experiments.
+
+## Architecture
+
+![Comparison of LoRA and VoRA](assets/vora-overview.png)
+
+**LoRA and VoRA.** LoRA adds one linear low-rank residual branch to a frozen pretrained projection. VoRA retains the linear branch and adds a quadratic branch that projects the input into a low-rank latent space, constructs element-wise quadratic features, and projects them back to the output space.
+
+### Adapter formulation
+
+Given an input feature $x$ and a frozen pretrained weight $W_0$, the base response is
+
+```math
+h_0 = W_0 x.
 ```
 
-VoRA-v1 adds a quadratic low-rank branch:
+The linear LoRA residual is
 
-```text
-y = W0 x + B_l A_l x + B_v(A_v x \odot A_v x)
+```math
+\Delta h_l = s_l B_l A_l x.
 ```
 
-The codebase is intentionally simple at first so later variants can be added cleanly:
+The quadratic branch first produces a low-rank latent feature and then applies an element-wise square:
 
-- `models/lora_linear.py`: LoRA baseline.
-- `models/vora_linear.py`: VoRA linear layer wrapper.
-- `models/volterra.py`: reusable Volterra branches.
-- `models/token_interaction.py`: token-neighborhood interaction modules.
-- `models/routing.py`: input-conditioned expert routing.
+```math
+z = A_q x, \qquad q = z \odot z.
+```
 
-## Quick Check
+The quadratic residual and final VoRA output are
+
+```math
+\Delta h_q = s_q B_q q,
+```
+
+```math
+h = h_0 + \Delta h_l + \Delta h_q.
+```
+
+For linear rank $r_l$ and quadratic rank $r_q$, the number of trainable adapter parameters is
+
+```math
+N_{\mathrm{VoRA}} = (r_l + r_q)(d_{\mathrm{in}} + d_{\mathrm{out}}).
+```
+
+Setting $r_l=r_q=r/2$ gives VoRA the same parameter count as LoRA rank $r$. The quadratic branch has computational complexity $\mathcal{O}(r_q(d_{\mathrm{in}}+d_{\mathrm{out}}))$ for each input feature vector.
+
+### SwinIR integration
+
+<p align="center">
+  <img src="assets/vora-swinir-insertion.png" width="520" alt="VoRA insertion into a SwinIR Transformer block">
+</p>
+
+VoRA is attached to selected frozen projection layers in a SwinIR restoration Transformer block: the fused QKV projection, attention output projection, and MLP projection. The frozen response and VoRA residual are computed from the same input and combined by residual addition.
+
+## Results
+
+Results are reported as **PSNR / SSIM**. The values below are taken from the accompanying manuscript.
+
+### Main image restoration comparison
+
+| Method | Rain100H | CSD | GoPro | RESIDE-6K | Trainable parameters | Ratio |
+|---|---:|---:|---:|---:|---:|---:|
+| Full fine-tuning | **27.43 / 0.9551** | 25.23 / 0.8952 | **27.80 / 0.9372** | **24.23 / 0.9192** | 3,137,427 | 100% |
+| Frozen | 8.71 / 0.3617 | 12.82 / 0.3519 | 13.41 / 0.5533 | 10.63 / 0.3900 | 0 | 0% |
+| LoRA | 22.91 / 0.8840 | 24.69 / 0.8917 | 27.17 / 0.9306 | 23.34 / 0.8983 | 147,456 | 4.7% |
+| **VoRA** | **24.40 / 0.9141** | **25.65 / 0.9148** | **27.30 / 0.9309** | **23.84 / 0.9080** | 294,912 | 9.4% |
+
+### Parameter-matched comparison
+
+LoRA rank 8 and VoRA with $r_l=r_q=4$ both use 294,912 trainable parameters.
+
+| Task | Dataset | LoRA (r=8) | VoRA ($r_l=r_q=4$) | Delta PSNR | Delta SSIM |
+|---|---|---:|---:|---:|---:|
+| Deraining | Rain100H | 23.07 / 0.8873 | **24.27 / 0.9123** | +1.2008 | +0.0250 |
+| Desnowing | CSD | 24.47 / 0.8916 | **25.74 / 0.9158** | +1.2767 | +0.0241 |
+| Denoising | SIDD | 32.96 / 0.8445 | **33.23 / 0.8476** | +0.2761 | +0.0031 |
+| Deblurring | GoPro | 27.21 / 0.9305 | **27.36 / 0.9310** | +0.1485 | +0.0005 |
+| Dehazing | RESIDE-6K | 23.11 / 0.8980 | **23.53 / 0.9045** | +0.4197 | +0.0066 |
+| **Average** | - | 26.16 / 0.8904 | **26.83 / 0.9022** | **+0.6644** | **+0.0118** |
+
+### Generalization across restoration backbones
+
+| Backbone | LoRA (r=8) | VoRA ($r_l=r_q=4$) | Delta PSNR | Delta SSIM |
+|---|---:|---:|---:|---:|
+| SwinIR | 23.07 / 0.8873 | **24.25 / 0.9097** | +1.1775 | +0.0224 |
+| Uformer | 23.78 / 0.8983 | **24.91 / 0.9188** | +1.1297 | +0.0205 |
+| HAT | 22.88 / 0.8954 | **24.99 / 0.9181** | +2.1044 | +0.0227 |
+| AdaIR | 25.10 / 0.9198 | **26.77 / 0.9443** | +1.6752 | +0.0245 |
+| Restormer | 25.14 / 0.9199 | **26.51 / 0.9395** | +1.3656 | +0.0196 |
+
+### Composite degradation restoration
+
+| Composite degradation | LoRA (r=8) | VoRA ($r_l=r_q=4$) | Delta PSNR | Delta SSIM |
+|---|---:|---:|---:|---:|
+| Rain + Haze | 22.89 / 0.8867 | **24.71 / 0.9147** | +1.82 | +0.0280 |
+| Rain + Blur | 21.11 / 0.8437 | **22.29 / 0.8716** | +1.19 | +0.0279 |
+| Blur + Noise | 26.24 / 0.9254 | **26.36 / 0.9265** | +0.12 | +0.0011 |
+| Haze + Noise | 21.95 / 0.8625 | **22.83 / 0.8834** | +0.89 | +0.0209 |
+
+## Supported datasets and backbones
+
+### Datasets
+
+| Task | Dataset | CLI name |
+|---|---|---|
+| Deraining | Rain100H | `rain100h` |
+| Desnowing | CSD | `csd` |
+| Denoising | SIDD | `sidd` |
+| Deblurring | GoPro | `gopro` |
+| Dehazing | RESIDE-6K | `reside6k` |
+
+### Backbones
+
+- SwinIR Lite and official SwinIR
+- Uformer
+- HAT
+- AdaIR
+- DFPIR Restormer
+- MambaIRv2
+
+Dataset files and pretrained backbone weights are not included in this repository.
+
+## Quick start
+
+### 1. Installation
+
+```bash
+git clone https://github.com/degull/VORA.git
+cd VORA
+
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### 2. Adapter sanity check
 
 ```bash
 python test.py
 ```
 
-This compares forward shapes and trainable parameter counts for `LoRALinear` and `VoRALinear` on random input.
+This checks output shapes, branch outputs, and trainable parameter counts for the LoRA and VoRA linear adapters.
 
-## Project Layout
+### 3. Prepare data
+
+The shared data root should contain the selected datasets in the following layout:
 
 ```text
-VoRA/
-├── config.py
-├── train.py
-├── test.py
-├── models/
-│   ├── lora_linear.py
-│   ├── vora_linear.py
-│   ├── volterra.py
-│   ├── routing.py
-│   ├── token_interaction.py
-│   ├── vit/
-│   └── restoration/
-├── losses/
-├── datasets/
-├── engine/
-├── utils/
-├── experiments/
-├── checkpoints/
-├── outputs/
-└── papers/ 
+data/
+├── rain100H/
+│   ├── train/{rain,norain}/
+│   └── test/{rain,norain}/
+├── CSD/
+│   ├── Train/{Snow,Gt}/
+│   └── Test/{Snow,Gt}/
+├── GOPRO_Large/
+│   ├── train/*/{blur,sharp}/
+│   └── test/*/{blur,sharp}/
+├── RESIDE-6K/
+│   ├── train/{hazy,GT}/
+│   └── test/{hazy,GT}/
+└── SIDD/
+    ├── sidd_pairs.csv
+    └── sidd_test_pairs.csv
 ```
 
-## Roadmap
+### 4. Smoke-test training
 
-1. LoRA baseline.
-2. VoRA-v1 with efficient quadratic Volterra branch.
-3. Token interaction-aware VoRA.
-4. Dynamic routing with multiple Volterra experts.
-5. ViT and restoration backbone integration.
+```bash
+python train.py \
+  --dataset rain100h \
+  --data-root /path/to/data \
+  --method vora_v1 \
+  --backbone swinir_lite \
+  --rank 4 \
+  --target all \
+  --steps 10
+```
+
+The default sample limits (`16` training pairs and `4` validation pairs) are intended for quick checks. For a full dataset run, pass `--max-train-samples 0 --max-val-samples 0` and set the desired number of training steps.
+
+### 5. Parameter-matched LoRA and VoRA runs
+
+```bash
+# LoRA: rank 8
+python train.py --dataset rain100h --data-root /path/to/data \
+  --method lora --backbone swinir_official --swinir-size base \
+  --rank 8 --target all --max-train-samples 0 --max-val-samples 0
+
+# VoRA: rank 4 for both linear and quadratic branches
+python train.py --dataset rain100h --data-root /path/to/data \
+  --method vora_v1 --backbone swinir_official --swinir-size base \
+  --rank 4 --target all --max-train-samples 0 --max-val-samples 0
+```
+
+Checkpoints are saved under `checkpoints/`, and CSV logs are written under `outputs/logs/`. Use `--resume PATH` or `--auto-resume` to continue a run.
+
+## Experiment scripts
+
+| Script | Purpose |
+|---|---|
+| `run_main_comparison.py` | Frozen, LoRA, VoRA, and full fine-tuning comparison |
+| `run_table2_task_generalization.py` | Parameter-matched task generalization |
+| `run_table3_backbone_param_matched.py` | Backbone generalization |
+| `run_table4_composite_degradation.py` | Composite degradation evaluation |
+| `run_table5_degradation_interaction.py` | Degradation interaction analysis |
+| `run_table5_param_matched_comparison.py` | Parameter-matched adapter comparison |
+| `run_table6_ablation_study.py` | VoRA component ablations |
+
+## Repository structure
+
+```text
+VORA/
+├── models/                 # LoRA, VoRA, Volterra, ablation, and backbone modules
+├── datasets/               # Paired and composite degradation datasets
+├── engine/                 # Training, evaluation, and metrics
+├── losses/                 # Reconstruction and perceptual losses
+├── utils/                  # Adapter replacement, checkpoints, logging, visualization
+├── checkpoints/            # Saved model checkpoints
+├── outputs/                # CSV logs, figures, and restored images
+├── train.py                # Shared restoration training entry point
+├── test.py                 # Adapter sanity check
+└── run_*.py                # Reproduction scripts for paper experiments
+```
+
+---
+
+## 한국어 소개
+
+VoRA(Volterra Low-Rank Adaptation)는 기존 LoRA의 선형 저랭크 잔차 분기에 **저랭크 2차 분기**를 병렬로 추가한 이미지 복원용 PEFT 기법입니다. 사전학습 백본의 가중치는 고정한 채 어댑터만 학습하며, 입력 전체 차원에서 완전한 2차 커널을 만들지 않고 압축된 잠재 공간에서 원소별 제곱 연산을 수행합니다.
+
+### 핵심 아이디어
+
+- LoRA의 선형 적응 능력을 유지하면서 2차 특징 상호작용을 명시적으로 모델링합니다.
+- 입력을 $r_q$차원의 잠재 공간으로 투영한 뒤 $z\odot z$를 계산하므로 완전한 2차 전개보다 효율적입니다.
+- LoRA rank 8과 VoRA의 두 분기 rank 4를 비교하면 학습 파라미터 수가 294,912개로 동일합니다.
+- 동일한 파라미터 조건에서 VoRA는 Rain100H, CSD, SIDD, GoPro, RESIDE-6K 모두에서 LoRA보다 높은 PSNR과 SSIM을 기록했습니다.
+- SwinIR뿐 아니라 Uformer, HAT, AdaIR, Restormer에서도 일관된 성능 향상을 보였습니다.
+
+### SwinIR 적용 위치
+
+VoRA는 SwinIR 복원 Transformer 블록의 fused QKV projection, attention output projection, MLP projection에 삽입됩니다. 고정된 projection 출력과 VoRA 잔차는 동일한 입력 특징으로부터 계산되고 원소별 덧셈으로 결합됩니다.
+
+### 지원 작업
+
+- Rain100H 비 제거
+- CSD 눈 제거
+- SIDD 노이즈 제거
+- GoPro 모션 디블러링
+- RESIDE-6K 안개 제거
+- Rain+Haze, Rain+Blur, Blur+Noise, Haze+Noise 복합 열화 복원
+
+설치와 실행 명령, 데이터 폴더 구조, 정량 결과는 위의 [Quick Start](#quick-start)와 [Results](#results)에서 확인할 수 있습니다.
