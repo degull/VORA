@@ -31,7 +31,8 @@ The repository supports deraining, desnowing, denoising, deblurring, dehazing, a
 
 ## Architecture
 
-![Comparison of LoRA and VoRA](assets/vora-overview.png)
+<img width="1450" height="430" alt="vora-overview" src="https://github.com/user-attachments/assets/ff94f1dd-2205-4445-9d44-119a0f12ee05" />
+
 
 **LoRA and VoRA.** LoRA adds one linear low-rank residual branch to a frozen pretrained projection. VoRA retains the linear branch and adds a quadratic branch that projects the input into a low-rank latent space, constructs element-wise quadratic features, and projects them back to the output space.
 
@@ -76,7 +77,7 @@ Setting $r_l=r_q=r/2$ gives VoRA the same parameter count as LoRA rank $r$. The 
 ### SwinIR integration
 
 <p align="center">
-  <img width="700" height="620" alt="vora-swinir-insertion" src="https://github.com/user-attachments/assets/fe6b2cfa-3668-4efb-a68f-d6334b18e052" /><img width="1450" height="430" alt="vora-overview" src="https://github.com/user-attachments/assets/f90da9e3-9fea-4bd4-b4e7-c542714f3957" />
+<img width="700" height="620" alt="vora-swinir-insertion" src="https://github.com/user-attachments/assets/344eac49-accd-4d3a-9ba4-d084ec1ded3e" />
 
 </p>
 
